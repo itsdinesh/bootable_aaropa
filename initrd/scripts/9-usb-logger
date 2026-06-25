@@ -1,0 +1,58 @@
+# usb-logger background execution
+(
+	# Wait for devices to register
+	sleep 5
+
+	find_log_partition() {
+		local dev
+		local devname
+		local sectors
+		for dev in /dev/[hmnsvx][dmrv][0-9a-z]*; do
+			[ -b "$dev" ] || continue
+			devname=$(basename "$dev")
+			[ -f "/sys/class/block/$devname/size" ] || continue
+			sectors=$(cat "/sys/class/block/$devname/size")
+			# 5000000 to 9000000 sectors corresponds to 2.38 GB - 4.29 GB
+			if [ "$sectors" -gt 5000000 ] && [ "$sectors" -lt 9000000 ]; then
+				if blkid "$dev" | grep -q 'TYPE="vfat"'; then
+					echo "$dev"
+					return 0
+				fi
+			fi
+		done
+		return 1
+	}
+
+	log_dev=$(find_log_partition)
+
+	if [ -n "$log_dev" ]; then
+		mkdir -p /dev/usb_log
+		# Mount the partition
+		if mount -t vfat "$log_dev" /dev/usb_log || mount "$log_dev" /dev/usb_log; then
+			echo "=== USB LOGGER STARTED AT $(date) ===" > /dev/usb_log/usb_logger_status.txt
+			echo "Target partition: $log_dev" >> /dev/usb_log/usb_logger_status.txt
+			sync
+
+			# Start logging loop
+			while true; do
+				# Dump dmesg
+				dmesg > /dev/usb_log/dmesg.txt 2>&1
+
+				# Dump early boot log if it exists
+				if [ -f /tmp/log ]; then
+					cat /tmp/log > /dev/usb_log/early_boot_log.txt 2>&1
+				fi
+
+				# Dump logcat if available
+				if which logcat >/dev/null 2>&1; then
+					logcat -d > /dev/usb_log/logcat.txt 2>&1
+				elif [ -x /system/bin/logcat ]; then
+					/system/bin/logcat -d > /dev/usb_log/logcat.txt 2>&1
+				fi
+
+				sync
+				sleep 2
+			done
+		fi
+	fi
+) &
