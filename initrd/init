@@ -78,6 +78,7 @@ EOF
 <manifest version="1.0" type="device">
 </manifest>
 EOF
+		chmod 644 /tmp/fakeboot.xml
 		mount --bind /tmp/fakeboot.xml /system/vendor/etc/vintf/manifest/android.hardware.boot@1.2.xml
 	fi
 

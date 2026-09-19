@@ -1,50 +1,45 @@
 #!/bin/bash
 
-# URLs for the GitHub release page and API
-RELEASE_URL="https://github.com/Ananda-Aropa/aaropa_rootfs_installer_blissos/releases/latest"
-API_URL="https://api.github.com/repos/Ananda-Aropa/aaropa_rootfs_installer_blissos/releases/latest"
+TARGET_VERSION="${TARGET_VERSION:-20260509}"
+RELEASE_URL="https://github.com/Ananda-Aropa/aaropa_rootfs_installer_blissos/releases/download/${TARGET_VERSION}"
 VERSION_FILE="version.txt"
 
 # Get the script's directory and change to it
 SCRIPT_DIR=$(dirname "$0")
 cd "$SCRIPT_DIR" || exit
 
-# Files to download
+# If install.sfs and initrd_lib already exist, keep existing files and exit cleanly
+if [[ -f "iso/install.sfs" && -d "initrd_lib" && -f "boot_hybrid.img" && -f "$VERSION_FILE" ]]; then
+  echo "Aaropa files (including install.sfs) already exist. Skipping download."
+  exit 0
+fi
+
+# Files to download (excluding install.sfs to protect existing install.sfs)
 FILES=(
-  "install.sfs"
   "initrd_lib.tar.gz"
   "grub-rescue.iso"
   "boot_hybrid.img"
 )
 
-# Function to get the latest tag from GitHub API
+# Function to get the target version
 get_latest_version() {
-  if command -v curl &> /dev/null; then
-    curl -s "$API_URL" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'
-  elif command -v wget &> /dev/null; then
-    wget -qO- "$API_URL" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/'
-  fi
+  echo "$TARGET_VERSION"
 }
 
 # Function to check version and optionally exit
 check_version() {
-  echo "Checking for the latest version..."
+  echo "Checking for the version..."
   LATEST_VERSION=$(get_latest_version)
-  
-  if [[ -z "$LATEST_VERSION" ]]; then
-    echo "Warning: Could not determine the latest version from GitHub. Proceeding with download..."
-    return 0
-  fi
 
   if [[ -f "$VERSION_FILE" ]]; then
     LOCAL_VERSION=$(cat "$VERSION_FILE")
-    if [[ "$LATEST_VERSION" == "$LOCAL_VERSION" ]]; then
-      echo "You already have the latest version ($LATEST_VERSION). Skipping download."
+    if [[ "$LATEST_VERSION" == "$LOCAL_VERSION" && -f "iso/install.sfs" && -d "initrd_lib" ]]; then
+      echo "You already have version ($LATEST_VERSION). Skipping download."
       exit 0
     fi
   fi
-  
-  echo "New version found: $LATEST_VERSION (Current: ${LOCAL_VERSION:-None})"
+
+  echo "Target version: $LATEST_VERSION (Current: ${LOCAL_VERSION:-None})"
 }
 
 # Function to update the version file
@@ -56,8 +51,13 @@ update_version() {
 }
 
 # Function to remove existing files from the FILES list and directories
+# Note: Never removes or overwrites iso/install.sfs
 remove_existing_files() {
-  # Remove files listed in the FILES array
+  # Backup existing install.sfs if present
+  if [[ -f "iso/install.sfs" ]]; then
+    cp -p "iso/install.sfs" "install.sfs.bak"
+  fi
+
   for FILE in "${FILES[@]}"; do
     if [[ -f "$FILE" ]]; then
       echo "Removing existing file: $FILE"
@@ -65,15 +65,15 @@ remove_existing_files() {
     fi
   done
 
-  # Remove initrd_lib and iso directories
+  # Remove initrd_lib directory
   if [[ -d "initrd_lib" ]]; then
     echo "Removing existing directory: initrd_lib"
     rm -rf initrd_lib
   fi
 
   if [[ -d "iso" ]]; then
-    echo "Removing existing directory: iso"
-    rm -rf iso
+    echo "Cleaning iso directory (preserving install.sfs)..."
+    find iso -mindepth 1 ! -name "install.sfs" -delete 2>/dev/null || true
   fi
 }
 
@@ -81,14 +81,14 @@ remove_existing_files() {
 download_with_aria2() {
   local file="$1"
   echo "Downloading $file using aria2c..."
-  aria2c -x 16 -s 16 "$RELEASE_URL/download/$file"
+  aria2c -x 16 -s 16 "$RELEASE_URL/$file"
 }
 
 # Function to download files using wget
 download_with_wget() {
   local file="$1"
   echo "Downloading $file using wget..."
-  wget "$RELEASE_URL/download/$file"
+  wget "$RELEASE_URL/$file"
 }
 
 # Function to extract grub-rescue.iso to the iso directory and delete the iso file
@@ -97,14 +97,12 @@ extract_grub_rescue_iso() {
   mkdir -p iso
   # Extract the contents of the ISO into the "iso" folder
   7z x grub-rescue.iso -oiso
+  # Restore backup of install.sfs if needed
+  if [[ -f "install.sfs.bak" ]]; then
+    mv -f "install.sfs.bak" "iso/install.sfs"
+  fi
   # Delete the ISO after extracting
-  rm grub-rescue.iso
-}
-
-# Function to move install.sfs to the iso directory
-move_install_sfs() {
-  echo "Moving install.sfs to iso directory..."
-  mv install.sfs iso/
+  rm -f grub-rescue.iso
 }
 
 # Function to extract initrd_lib.tar.gz and move the content to the initrd folder
@@ -135,7 +133,7 @@ case "$1" in
   --help)
     show_help
     ;;
-  
+
   --initrd-only)
     # Check the version first
     check_version
@@ -151,12 +149,12 @@ case "$1" in
     fi
 
     extract_initrd_lib
-    
+
     # Save the new version
     update_version
     echo "Script execution complete!"
     ;;
-  
+
   *)
     # Check the version first
     check_version
@@ -179,7 +177,6 @@ case "$1" in
 
     # Process the downloaded files
     extract_grub_rescue_iso
-    move_install_sfs
     extract_initrd_lib
 
     # Save the new version

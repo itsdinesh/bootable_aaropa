@@ -129,6 +129,7 @@ link_fstab() {
 	fstab=${REAL_FSTAB:-$ROOT_FSTAB}
 
 	cat $fstab >>/tmp/fstab.real
+	chmod 644 /tmp/fstab.real
 	mount --bind /tmp/fstab.real $fstab
 
 	if [ "$REAL_FSTAB" ]; then
