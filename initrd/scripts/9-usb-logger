@@ -1,20 +1,40 @@
 # usb-logger background execution
 (
-	# Wait for devices to register
-	sleep 5
-
 	find_log_partition() {
 		local dev
-		local devname
-		local sectors
+		# 1. First priority: explicit BOOTLOG label
+		dev=$(findfs LABEL=BOOTLOG 2>/dev/null)
+		if [ -b "$dev" ]; then
+			echo "$dev"
+			return 0
+		fi
+
+		for dev in /dev/[hmnsvx][dmrv][0-9a-z]* /dev/block/*; do
+			[ -b "$dev" ] || continue
+			if blkid "$dev" 2>/dev/null | grep -q 'LABEL="BOOTLOG"'; then
+				echo "$dev"
+				return 0
+			fi
+		done
+
+		# 2. Fallback: find any removable partition with supported filesystem
+		for dev in /dev/sd[a-z][0-9]*; do
+			[ -b "$dev" ] || continue
+			[ "$dev" = "$ROOT" ] && continue
+			if blkid "$dev" 2>/dev/null | grep -qE 'TYPE="(vfat|exfat|ext4)"'; then
+				echo "$dev"
+				return 0
+			fi
+		done
+
+		# 3. Legacy size fallback (2.38 GB - 4.29 GB FAT32)
 		for dev in /dev/[hmnsvx][dmrv][0-9a-z]*; do
 			[ -b "$dev" ] || continue
-			devname=$(basename "$dev")
+			local devname=$(basename "$dev")
 			[ -f "/sys/class/block/$devname/size" ] || continue
-			sectors=$(cat "/sys/class/block/$devname/size")
-			# 5000000 to 9000000 sectors corresponds to 2.38 GB - 4.29 GB
+			local sectors=$(cat "/sys/class/block/$devname/size")
 			if [ "$sectors" -gt 5000000 ] && [ "$sectors" -lt 9000000 ]; then
-				if blkid "$dev" | grep -q 'TYPE="vfat"'; then
+				if blkid "$dev" 2>/dev/null | grep -q 'TYPE="vfat"'; then
 					echo "$dev"
 					return 0
 				fi
@@ -23,35 +43,72 @@
 		return 1
 	}
 
-	log_dev=$(find_log_partition)
+	# Fast-poll for log partition without long initial sleep
+	log_dev=""
+	for _attempt in $(seq 1 15); do
+		log_dev=$(find_log_partition)
+		[ -n "$log_dev" ] && break
+		sleep 0.2
+	done
 
 	if [ -n "$log_dev" ]; then
 		mkdir -p /dev/usb_log
-		# Mount the partition
-		if mount -t vfat "$log_dev" /dev/usb_log || mount "$log_dev" /dev/usb_log; then
-			echo "=== USB LOGGER STARTED AT $(date) ===" > /dev/usb_log/usb_logger_status.txt
-			echo "Target partition: $log_dev" >> /dev/usb_log/usb_logger_status.txt
-			sync
+		mounted=0
+		for _fs in vfat exfat ext4; do
+			if mount -t "$_fs" -o rw,noatime "$log_dev" /dev/usb_log 2>/dev/null; then
+				mounted=1
+				break
+			fi
+		done
+		if [ "$mounted" -eq 0 ]; then
+			mount "$log_dev" /dev/usb_log 2>/dev/null && mounted=1
+		fi
 
-			# Start logging loop
+		if [ "$mounted" -eq 1 ]; then
+			# Preserve busybox on mounted volume so switch_root does not break logger execution
+			cp /bin/busybox /dev/usb_log/.busybox 2>/dev/null
+			chmod 755 /dev/usb_log/.busybox 2>/dev/null
+			BBOX=/dev/usb_log/.busybox
+			[ -x "$BBOX" ] || BBOX=busybox
+
+			mkdir -p /dev/usb_log/bootlogs 2>/dev/null
+
+			local mode_str="normal"
+			[ -n "$RCVRY" ] && mode_str="recovery"
+
+			echo "=== USB LOGGER STARTED AT $(date) (mode: $mode_str, dev: $log_dev) ===" > /dev/usb_log/usb_logger_status.txt
+			echo "=== USB LOGGER STARTED AT $(date) (mode: $mode_str, dev: $log_dev) ===" > /dev/usb_log/bootlogs/early_logger_status.txt
+			$BBOX sync
+
+			# Fast initial dumps
+			$BBOX dmesg > /dev/usb_log/dmesg.txt 2>&1
+			$BBOX dmesg > /dev/usb_log/bootlogs/recovery_dmesg.txt 2>&1
+			if [ -f /tmp/log ]; then
+				$BBOX cat /tmp/log > /dev/usb_log/early_boot_log.txt 2>&1
+				$BBOX cat /tmp/log > /dev/usb_log/bootlogs/recovery_early_boot_log.txt 2>&1
+			fi
+			$BBOX sync
+
+			# Continuous fast logging loop
 			while true; do
-				# Dump dmesg
-				dmesg > /dev/usb_log/dmesg.txt 2>&1
+				$BBOX dmesg > /dev/usb_log/dmesg.txt 2>&1
+				$BBOX dmesg > /dev/usb_log/bootlogs/recovery_dmesg.txt 2>&1
 
-				# Dump early boot log if it exists
 				if [ -f /tmp/log ]; then
-					cat /tmp/log > /dev/usb_log/early_boot_log.txt 2>&1
+					$BBOX cat /tmp/log > /dev/usb_log/early_boot_log.txt 2>&1
+					$BBOX cat /tmp/log > /dev/usb_log/bootlogs/recovery_early_boot_log.txt 2>&1
 				fi
 
-				# Dump logcat if available
 				if which logcat >/dev/null 2>&1; then
 					logcat -d > /dev/usb_log/logcat.txt 2>&1
+					logcat -d > /dev/usb_log/bootlogs/recovery_logcat.txt 2>&1
 				elif [ -x /system/bin/logcat ]; then
 					/system/bin/logcat -d > /dev/usb_log/logcat.txt 2>&1
+					/system/bin/logcat -d > /dev/usb_log/bootlogs/recovery_logcat.txt 2>&1
 				fi
 
-				sync
-				sleep 2
+				$BBOX sync
+				$BBOX sleep 0.5
 			done
 		fi
 	fi

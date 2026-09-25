@@ -21,8 +21,8 @@ setup_recovery() {
     return 1
   fi
 
-  mkdir /recovery
-  mount -t tmpfs tmpfs /recovery
+  mkdir -p /recovery
+  mount -t tmpfs -o mode=0755,rw tmpfs /recovery
   zcat "/mnt/$SRC/recovery$SLOT.img" | (
     cd /recovery
     cpio -iud >/dev/null
