@@ -64,13 +64,17 @@
 		[ "$mounted" -eq 0 ] && mount "$log_dev" /dev/usb_log 2>/dev/null && mounted=1
 		[ "$mounted" -eq 1 ] || return 0
 
-		local logdir="/dev/usb_log/bootlogs"
+		local mode_str="boot"
+		local log_subdir="bootlogs"
+		if [ -n "$RCVRY" ]; then
+			mode_str="recovery"
+			log_subdir="recoverylogs"
+		fi
+
+		local logdir="/dev/usb_log/$log_subdir"
 		mkdir -p "$logdir" 2>/dev/null
 
-		local mode_str="boot"
-		[ -n "$RCVRY" ] && mode_str="recovery"
-
-		# Determine monotonic counter matching Android bootlog convention
+		# Determine monotonic counter matching bootlog convention
 		local cnt=0
 		[ -f "$logdir/.counter" ] && cnt=$(cat "$logdir/.counter" 2>/dev/null)
 		cnt=$((cnt + 1))
@@ -78,9 +82,14 @@
 
 		local ts=$(date +%Y%m%d-%H%M%S 2>/dev/null)
 		[ -z "$ts" ] && ts="00000000-000000"
-		local tag=$(printf '%s%04d-%s' "$mode_str" "$cnt" "$ts")
-		local session_dir="$logdir/$tag"
+		local session_name=$(printf '%s%04d' "$mode_str" "$cnt")
+		local tag=$(printf '%s-%s' "$session_name" "$ts")
+		local session_dir="$logdir/$session_name"
 		mkdir -p "$session_dir" 2>/dev/null
+
+		# Save current session and tag for userspace continuation
+		echo "$session_name" > "$logdir/.current_session" 2>/dev/null
+		echo "$tag" > "$logdir/.current_tag" 2>/dev/null
 
 		echo "==== $mode_str $tag dev=$log_dev uptime=$(cat /proc/uptime 2>/dev/null) ====" > "$session_dir/$tag-info.txt"
 
@@ -94,29 +103,25 @@
 		dmesg > /dev/usb_log/dmesg.txt 2>&1
 		[ -f /tmp/log ] && cp /tmp/log /dev/usb_log/early_boot_log.txt 2>/dev/null
 
-		if [ -n "$RCVRY" ]; then
-			dmesg > "$logdir/recovery-latest-dmesg.txt" 2>&1
-			[ -f /tmp/log ] && cp /tmp/log "$logdir/recovery-latest-initrd.log" 2>/dev/null
-		fi
+		dmesg > "$logdir/${mode_str}-latest-dmesg.txt" 2>&1
+		[ -f /tmp/log ] && cp /tmp/log "$logdir/${mode_str}-latest-initrd.log" 2>/dev/null
 		sync
 
 		# Continuous fast logging loop
 		while true; do
 			dmesg > "$session_dir/$tag-dmesg.txt" 2>&1
+			dmesg > "$logdir/${mode_str}-latest-dmesg.txt" 2>&1
 			dmesg > /dev/usb_log/dmesg.txt 2>&1
 			[ -f /tmp/log ] && cp /tmp/log "$session_dir/$tag-early-initrd.log" 2>/dev/null
 
 			if which logcat >/dev/null 2>&1; then
 				logcat -d > "$session_dir/$tag-logcat.txt" 2>&1
+				logcat -d > "$logdir/${mode_str}-latest-logcat.txt" 2>&1
 				logcat -d > /dev/usb_log/logcat.txt 2>&1
 			elif [ -x /system/bin/logcat ]; then
 				/system/bin/logcat -d > "$session_dir/$tag-logcat.txt" 2>&1
+				/system/bin/logcat -d > "$logdir/${mode_str}-latest-logcat.txt" 2>&1
 				/system/bin/logcat -d > /dev/usb_log/logcat.txt 2>&1
-			fi
-
-			if [ -n "$RCVRY" ]; then
-				dmesg > "$logdir/recovery-latest-dmesg.txt" 2>&1
-				[ -f /tmp/log ] && cp /tmp/log "$logdir/recovery-latest-initrd.log" 2>/dev/null
 			fi
 
 			sync
