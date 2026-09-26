@@ -11,24 +11,32 @@
 setup_recovery() {
   [ "$RCVRY" ] || return 0
 
-  if [ ! "$SLOT" ] && [ ! -e "/mnt/$SRC/recovery.img" ]; then
-    # Assuming if ramdisk-recovery.img exist, this is booting Live from USB
-    if [ -e "/mnt/$SRC/ramdisk-recovery.img" ]; then
-      echo "WARNING: Do not boot Recovery in the Live environment"
-    else
-      echo "WARNING: No recovery.img found"
-    fi
+  local rec_img=""
+  if [ -n "$SLOT" ] && [ -e "/mnt/$SRC/recovery$SLOT.img" ]; then
+    rec_img="/mnt/$SRC/recovery$SLOT.img"
+  elif [ -e "/mnt/$SRC/recovery.img" ]; then
+    rec_img="/mnt/$SRC/recovery.img"
+  elif [ -e "/mnt/$SRC/ramdisk-recovery.img" ]; then
+    rec_img="/mnt/$SRC/ramdisk-recovery.img"
+  fi
+
+  if [ -z "$rec_img" ]; then
+    echo "WARNING: No recovery image found (checked recovery$SLOT.img, recovery.img, ramdisk-recovery.img)"
     return 1
   fi
 
   mkdir -p /recovery
   mount -t tmpfs -o mode=0755,rw tmpfs /recovery
-  zcat "/mnt/$SRC/recovery$SLOT.img" | (
+  zcat "$rec_img" | (
     cd /recovery
     cpio -iud >/dev/null
   )
 
-	export REAL_FSTAB=/recovery/system/etc/recovery.fstab
+  mkdir -p /recovery/bin 2>/dev/null
+  cp /bin/busybox /recovery/bin/busybox 2>/dev/null
+  chmod 755 /recovery/bin/busybox 2>/dev/null
+
+  export REAL_FSTAB=/recovery/system/etc/recovery.fstab
 }
 
 probe_recovery() {
