@@ -45,23 +45,38 @@
 
 	run_logger() {
 		local log_dev=""
-		for _attempt in $(seq 1 15); do
-			log_dev=$(find_log_partition)
-			[ -n "$log_dev" ] && break
-			sleep 0.2
-		done
-
-		[ -z "$log_dev" ] && return 0
-
-		mkdir -p /dev/usb_log
 		local mounted=0
-		for _fs in vfat exfat ext4; do
-			if mount -t "$_fs" -o rw,noatime "$log_dev" /dev/usb_log 2>/dev/null; then
-				mounted=1
-				break
+		mkdir -p /dev/usb_log
+
+		# Poll for up to 60 seconds (120 attempts, 0.5s interval)
+		for _attempt in $(seq 1 120); do
+			mdev -s 2>/dev/null
+			log_dev=$(find_log_partition)
+			if [ -n "$log_dev" ]; then
+				for _fs in vfat exfat ext4; do
+					if mount -t "$_fs" -o rw,noatime,dirsync "$log_dev" /dev/usb_log 2>/dev/null; then
+						if touch /dev/usb_log/.test_rw 2>/dev/null && rm -f /dev/usb_log/.test_rw 2>/dev/null; then
+							mounted=1
+							break 2
+						else
+							umount /dev/usb_log 2>/dev/null
+						fi
+					fi
+				done
+				if [ "$mounted" -eq 0 ]; then
+					if mount -o rw,noatime "$log_dev" /dev/usb_log 2>/dev/null; then
+						if touch /dev/usb_log/.test_rw 2>/dev/null && rm -f /dev/usb_log/.test_rw 2>/dev/null; then
+							mounted=1
+							break
+						else
+							umount /dev/usb_log 2>/dev/null
+						fi
+					fi
+				fi
 			fi
+			sleep 0.5
 		done
-		[ "$mounted" -eq 0 ] && mount "$log_dev" /dev/usb_log 2>/dev/null && mounted=1
+
 		[ "$mounted" -eq 1 ] || return 0
 
 		local mode_str="boot"

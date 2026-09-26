@@ -268,20 +268,25 @@ setup_ab_loops() {
 	if [ "$SLOT" ]; then
 		local _slot
 		for _slot in _a _b; do
-			if [ "$SLOT" != "$_slot" ]; then
-				setup_loop "/mnt/$SRC/system$_slot.img" $ln_path/system$_slot
+			if [ -n "$RCVRY" ] || [ "$SLOT" != "$_slot" ]; then
+				[ -e "/mnt/$SRC/system$_slot.img" ] && setup_loop "/mnt/$SRC/system$_slot.img" $ln_path/system$_slot
 			fi
-			setup_loop "/mnt/$SRC/initrd$_slot.img" $ln_path/initrd$_slot
-			setup_loop "/mnt/$SRC/kernel$_slot" $ln_path/kernel$_slot
-			setup_loop "/mnt/$SRC/recovery$_slot.img" $ln_path/recovery$_slot
+			[ -e "/mnt/$SRC/initrd$_slot.img" ] && setup_loop "/mnt/$SRC/initrd$_slot.img" $ln_path/initrd$_slot
+			[ -e "/mnt/$SRC/kernel$_slot" ] && setup_loop "/mnt/$SRC/kernel$_slot" $ln_path/kernel$_slot
+			[ -e "/mnt/$SRC/recovery$_slot.img" ] && setup_loop "/mnt/$SRC/recovery$_slot.img" $ln_path/recovery$_slot
 		done
+		[ -e "$ln_path/system$SLOT" ] && ln -sf "system$SLOT" "$ln_path/system"
+		[ -e "$ln_path/kernel$SLOT" ] && ln -sf "kernel$SLOT" "$ln_path/kernel"
+		[ -e "$ln_path/initrd$SLOT" ] && ln -sf "initrd$SLOT" "$ln_path/initrd"
+		[ -e "$ln_path/recovery$SLOT" ] && ln -sf "recovery$SLOT" "$ln_path/recovery"
 	else
-		setup_loop "/mnt/$SRC/initrd.img" $ln_path/initrd
-		setup_loop "/mnt/$SRC/kernel" $ln_path/kernel
-		setup_loop "/mnt/$SRC/recovery.img" $ln_path/recovery
+		[ -e "/mnt/$SRC/system.img" ] && setup_loop "/mnt/$SRC/system.img" $ln_path/system
+		[ -e "/mnt/$SRC/initrd.img" ] && setup_loop "/mnt/$SRC/initrd.img" $ln_path/initrd
+		[ -e "/mnt/$SRC/kernel" ] && setup_loop "/mnt/$SRC/kernel" $ln_path/kernel
+		[ -e "/mnt/$SRC/recovery.img" ] && setup_loop "/mnt/$SRC/recovery.img" $ln_path/recovery
 	fi
 
-	setup_loop "/mnt/$SRC/misc.img" $ln_path/misc
+	[ -e "/mnt/$SRC/misc.img" ] && setup_loop "/mnt/$SRC/misc.img" $ln_path/misc
 }
 
 # shellcheck disable=SC2013
@@ -291,10 +296,13 @@ for c in $(cat /proc/cmdline); do
 	androidboot.slot_suffix=*) SLOT=${c##*=} ;;
 	# androidboot.efidisk=*) EFIDISK=$(find_device "${c##*=}") ;;
 	# androidboot.efidir=*) EFIDIR=${c##*=} ;;
-	androidboot.mode=recovery) RCVRY=1 ;;
+	androidboot.mode=recovery|recovery|RCVRY=*|rcvry=*|RECOVERY=*) RCVRY=1 ;;
 	*) ;;
 	esac
 done
+if grep -qE "androidboot\.mode=recovery|RCVRY" /proc/cmdline 2>/dev/null; then
+	RCVRY=1
+fi
 
 if [ -z "$SRC" ]; then
 	if [ -z "$ISO" ] && [ "$BOOT_IMAGE" ]; then

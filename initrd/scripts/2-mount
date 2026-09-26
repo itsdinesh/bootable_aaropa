@@ -125,6 +125,8 @@ process_fstab() {
 }
 
 link_fstab() {
+	[ -n "$RCVRY" ] && return 0
+
 	ROOT_FSTAB=$(ls $MODE_BASE/fstab.*)
 	fstab=${REAL_FSTAB:-$ROOT_FSTAB}
 
