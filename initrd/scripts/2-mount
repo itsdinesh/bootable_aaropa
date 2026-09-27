@@ -58,7 +58,30 @@ handle_fstab_line() {
 		echo "#>$2 $(ls -ld "$device" | awk '{print $5$6}' | tr ',' ' ')"
 
 		if to_mntpt "$2"; then
-			echo "/dev/block/by-name/$2 $RESULT $3 $4 $5"
+			local _fstype="$3"
+			if [ -z "$_fstype" ] || [ "$_fstype" = "auto" ]; then
+				local _detected_type
+				_detected_type=$(blkid -s TYPE -o value "$device" 2>/dev/null)
+				[ -n "$_detected_type" ] && _fstype="$_detected_type" || _fstype="${3:-auto}"
+			fi
+
+			local _mnt_flags="${4:-defaults}"
+			_mnt_flags=$(echo "$_mnt_flags" | sed -e 's/,nofail//g' -e 's/nofail,//g' -e 's/^nofail$/defaults/')
+
+			case "$2" in
+			esp|bootloader|cdrom)
+				local _mgr_flags="${5:-defaults}"
+				if [ "$_mgr_flags" = "defaults" ]; then
+					_mgr_flags="nofail"
+				elif ! echo "$_mgr_flags" | grep -q "nofail"; then
+					_mgr_flags="${_mgr_flags},nofail"
+				fi
+				echo "/dev/block/by-name/$2 $RESULT $_fstype $_mnt_flags $_mgr_flags"
+				;;
+			*)
+				echo "/dev/block/by-name/$2 $RESULT $_fstype $_mnt_flags ${5:-defaults}"
+				;;
+			esac
 		fi
 
 		case "$2" in
@@ -75,10 +98,10 @@ handle_fstab_line() {
 			[ -f $_img ] && mount $_img /android
 
 			# Link libraries
-			ln -s android/system android/vendor /
-			ln -s /vendor/firmware /system/lib/modules /lib
-			mkdir -p /lib/modules
-			ln -s /system/lib/modules /lib/modules/"$(uname -r)"
+			ln -sf android/system android/vendor / 2>/dev/null
+			ln -sf /vendor/firmware /lib/firmware 2>/dev/null
+			mkdir -p /lib/modules 2>/dev/null
+			ln -sf /system/lib/modules /lib/modules/"$(uname -r)" 2>/dev/null
 			;;
 		*) ;;
 		esac
@@ -101,7 +124,7 @@ handle_fstab_line() {
 			case "$is_nodev" in
 			nodev*)
 				to_mntpt "$2"
-				echo "$1 $RESULT $3 $4 $5"
+				echo "$1 $RESULT $3 ${4:-defaults} ${5:-defaults}"
 				;;
 			*) ;;
 			esac
@@ -125,16 +148,11 @@ process_fstab() {
 }
 
 link_fstab() {
-	[ -n "$RCVRY" ] && return 0
+	ROOT_FSTAB=$(ls $MODE_BASE/fstab.* 2>/dev/null | head -1)
+	[ -f "$ROOT_FSTAB" ] || return 0
 
-	ROOT_FSTAB=$(ls $MODE_BASE/fstab.*)
-	fstab=${REAL_FSTAB:-$ROOT_FSTAB}
-
-	cat $fstab >>/tmp/fstab.real
+	cat "$ROOT_FSTAB" >>/tmp/fstab.real
 	chmod 644 /tmp/fstab.real
-	mount --bind /tmp/fstab.real $fstab
-
-	if [ "$REAL_FSTAB" ]; then
-		mount --bind /tmp/fstab.real $ROOT_FSTAB
-	fi
+	mount --bind /tmp/fstab.real "$ROOT_FSTAB"
 }
+

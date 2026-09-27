@@ -1,5 +1,10 @@
 # usb-logger background execution
 (
+	# Do not log when running in installer mode
+	if [ -n "$INSTALL" ] || [ -f "/mnt/$SRC/install.sfs" ] || [ -d "/install" ]; then
+		exit 0
+	fi
+
 	find_log_partition() {
 		local dev
 		# 1. First priority: explicit BOOTLOG label
@@ -108,35 +113,71 @@
 
 		echo "==== $mode_str $tag dev=$log_dev uptime=$(cat /proc/uptime 2>/dev/null) ====" > "$session_dir/$tag-info.txt"
 
+		export PATH=/sbin:/bin:/usr/sbin:/usr/bin:/system/bin:/system/xbin:/vendor/bin:$PATH
+
+		capture_dmesg() {
+			if [ -x /bin/dmesg ]; then
+				/bin/dmesg 2>/dev/null
+			elif [ -x /usr/bin/dmesg ]; then
+				/usr/bin/dmesg 2>/dev/null
+			elif [ -x /system/bin/dmesg ]; then
+				/system/bin/dmesg 2>/dev/null
+			elif [ -x /bin/busybox ]; then
+				/bin/busybox dmesg 2>/dev/null
+			elif command -v dmesg >/dev/null 2>&1; then
+				dmesg 2>/dev/null
+			elif [ -r /proc/kmsg ]; then
+				cat /proc/kmsg 2>/dev/null
+			fi
+		}
+
+		capture_logcat() {
+			if [ -e /dev/socket/logdr ]; then
+				if [ -x /system/bin/logcat ]; then
+					/system/bin/logcat -d 2>/dev/null
+				elif command -v logcat >/dev/null 2>&1; then
+					logcat -d 2>/dev/null
+				fi
+			fi
+		}
+
 		# Initial fast capture
 		[ -f /tmp/log ] && cp /tmp/log "$session_dir/$tag-early-initrd.log" 2>/dev/null
-		dmesg > "$session_dir/$tag-dmesg-early.txt" 2>&1
-		dmesg > "$session_dir/$tag-dmesg.txt" 2>&1
+		local _init_dmesg=$(capture_dmesg)
+		if [ -n "$_init_dmesg" ]; then
+			echo "$_init_dmesg" > "$session_dir/$tag-dmesg-early.txt" 2>&1
+			echo "$_init_dmesg" > "$session_dir/$tag-dmesg.txt" 2>&1
+			echo "$_init_dmesg" > /dev/usb_log/dmesg.txt 2>&1
+			echo "$_init_dmesg" > "$logdir/${mode_str}-latest-dmesg.txt" 2>&1
+		fi
 
 		# Also write root-level log files for quick inspection
 		echo "=== USB LOGGER STARTED AT $(date) (tag: $tag, mode: $mode_str, dev: $log_dev) ===" > /dev/usb_log/usb_logger_status.txt
-		dmesg > /dev/usb_log/dmesg.txt 2>&1
 		[ -f /tmp/log ] && cp /tmp/log /dev/usb_log/early_boot_log.txt 2>/dev/null
-
-		dmesg > "$logdir/${mode_str}-latest-dmesg.txt" 2>&1
 		[ -f /tmp/log ] && cp /tmp/log "$logdir/${mode_str}-latest-initrd.log" 2>/dev/null
 		sync
 
 		# Continuous fast logging loop
 		while true; do
-			dmesg > "$session_dir/$tag-dmesg.txt" 2>&1
-			dmesg > "$logdir/${mode_str}-latest-dmesg.txt" 2>&1
-			dmesg > /dev/usb_log/dmesg.txt 2>&1
+			local _d_out=$(capture_dmesg)
+			if [ -n "$_d_out" ]; then
+				echo "$_d_out" > "$session_dir/$tag-dmesg.txt"
+				echo "$_d_out" > "$logdir/${mode_str}-latest-dmesg.txt"
+				echo "$_d_out" > /dev/usb_log/dmesg.txt
+			fi
 			[ -f /tmp/log ] && cp /tmp/log "$session_dir/$tag-early-initrd.log" 2>/dev/null
 
-			if which logcat >/dev/null 2>&1; then
-				logcat -d > "$session_dir/$tag-logcat.txt" 2>&1
-				logcat -d > "$logdir/${mode_str}-latest-logcat.txt" 2>&1
-				logcat -d > /dev/usb_log/logcat.txt 2>&1
-			elif [ -x /system/bin/logcat ]; then
-				/system/bin/logcat -d > "$session_dir/$tag-logcat.txt" 2>&1
-				/system/bin/logcat -d > "$logdir/${mode_str}-latest-logcat.txt" 2>&1
-				/system/bin/logcat -d > /dev/usb_log/logcat.txt 2>&1
+			local _l_out=$(capture_logcat)
+			if [ -n "$_l_out" ]; then
+				echo "$_l_out" > "$session_dir/$tag-logcat.txt"
+				echo "$_l_out" > "$logdir/${mode_str}-latest-logcat.txt"
+				echo "$_l_out" > /dev/usb_log/logcat.txt
+			fi
+
+			if [ -f /tmp/recovery.log ]; then
+				cp /tmp/recovery.log "$session_dir/$tag-recovery.log" 2>/dev/null
+				cp /tmp/recovery.log "$logdir/${mode_str}-latest-recovery.log" 2>/dev/null
+				cp /tmp/recovery.log /dev/usb_log/recovery.log 2>/dev/null
 			fi
 
 			sync
